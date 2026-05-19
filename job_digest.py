@@ -420,9 +420,15 @@ def filter_new(jobs: list[dict], seen: set, exclude_keywords: list[str]) -> list
 # ── Email builder ─────────────────────────────────────────────────────────────
 
 SOURCE_COLORS = {
-    "Indeed":   "#003A9B",
+    "Indeed":   "#2563EB",
     "LinkedIn": "#0A66C2",
-    "Idealist": "#E05B1A",
+    "Idealist": "#EA580C",
+}
+
+SOURCE_BG = {
+    "Indeed":   "#EFF6FF",
+    "LinkedIn": "#EFF6FF",
+    "Idealist": "#FFF7ED",
 }
 
 
@@ -435,72 +441,117 @@ def build_email_html(jobs: list[dict], prefs: dict) -> str:
     for job in jobs:
         by_source.setdefault(job["source"], []).append(job)
 
+    def job_card(j: dict, color: str) -> str:
+        summary_html = (
+            f'<p style="margin:8px 0 0;color:#6B7280;font-size:13px;line-height:1.5;">{j["summary"]}</p>'
+            if j["summary"] else ""
+        )
+        match_badge = ""
+        if j.get("_match_reason"):
+            match_badge = (
+                f'<span style="display:inline-block;margin-top:10px;padding:3px 10px;'
+                f'background:#DCFCE7;color:#15803D;font-size:11px;font-weight:600;'
+                f'border-radius:99px;">{j["_match_reason"]}</span>'
+            )
+        return f"""
+        <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-left:4px solid {color};
+                    border-radius:8px;padding:18px 20px;margin-bottom:12px;">
+          <a href="{j['url']}" style="color:#111827;text-decoration:none;font-size:15px;
+                                      font-weight:700;line-height:1.3;">{j['title']}</a>
+          <p style="margin:5px 0 0;color:#6B7280;font-size:13px;">
+            <span style="font-weight:600;color:#374151;">{j['company']}</span>
+            &nbsp;&middot;&nbsp;{j['location']}
+          </p>
+          {summary_html}
+          {match_badge}
+          <div style="margin-top:14px;">
+            <a href="{j['url']}" style="display:inline-block;padding:7px 16px;background:{color};
+               color:#fff;font-size:12px;font-weight:600;text-decoration:none;border-radius:6px;">
+              View role &rarr;
+            </a>
+          </div>
+        </div>"""
+
     def source_section(source: str, listings: list) -> str:
         color = SOURCE_COLORS.get(source, "#555")
-        cards = ""
-        for j in listings:
-            summary_html = (
-                f'<p style="margin:4px 0 0;color:#555;font-size:13px;">{j["summary"]}</p>'
-                if j["summary"] else ""
-            )
-            match_html = ""
-            if j.get("_match_reason"):
-                match_html = f'<p style="margin:6px 0 0;font-size:11px;color:#059669;font-weight:500;">{j["_match_reason"]}</p>'
-            cards += f"""
-            <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:10px;">
-              <a href="{j['url']}" style="color:#111;text-decoration:none;font-weight:600;font-size:15px;">{j['title']}</a>
-              <p style="margin:4px 0 0;color:#444;font-size:13px;">{j['company']} &middot; {j['location']}</p>
-              {summary_html}
-              {match_html}
-              <a href="{j['url']}" style="display:inline-block;margin-top:10px;font-size:12px;color:{color};text-decoration:none;font-weight:500;">View job &rarr;</a>
-            </div>"""
+        bg    = SOURCE_BG.get(source, "#F9FAFB")
+        cards = "".join(job_card(j, color) for j in listings)
+        badge = f'<span style="background:{color};color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;vertical-align:middle;">{len(listings)}</span>'
         return f"""
-        <div style="margin-bottom:28px;">
-          <h2 style="margin:0 0 12px;font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:{color};">
-            {source} &mdash; {len(listings)} new
-          </h2>
+        <div style="margin-bottom:32px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;
+                      padding:10px 14px;background:{bg};border-radius:8px;">
+            <span style="font-size:13px;font-weight:700;color:{color};letter-spacing:.04em;
+                         text-transform:uppercase;">{source}</span>
+            &nbsp;{badge}
+          </div>
           {cards}
         </div>"""
 
     sections = "".join(source_section(src, lst) for src, lst in by_source.items())
 
-    # Build preferences summary block (only shown if prefs are active)
     prefs_html = ""
     has_prefs = prefs.get("extra_search_terms") or prefs.get("exclude_keywords") or prefs.get("notes")
     if has_prefs:
-        extra  = ", ".join(prefs["extra_search_terms"]) if prefs["extra_search_terms"] else "none"
-        excl   = ", ".join(prefs["exclude_keywords"])   if prefs["exclude_keywords"]   else "none"
-        notes  = prefs.get("notes", "")
-        notes_row = f'<p style="margin:4px 0 0;font-size:12px;color:#666;"><em>{notes}</em></p>' if notes else ""
+        extra = ", ".join(prefs["extra_search_terms"]) if prefs["extra_search_terms"] else "—"
+        excl  = ", ".join(prefs["exclude_keywords"])   if prefs["exclude_keywords"]   else "—"
+        notes = prefs.get("notes", "")
+        notes_row = f'<p style="margin:6px 0 0;font-size:12px;color:#6B7280;font-style:italic;">{notes}</p>' if notes else ""
         prefs_html = f"""
-        <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:14px 16px;margin-bottom:24px;">
-          <p style="margin:0 0 6px;font-size:12px;font-weight:700;color:#0369a1;letter-spacing:.06em;text-transform:uppercase;">Your active search preferences</p>
-          <p style="margin:0;font-size:12px;color:#444;"><strong>Also searching:</strong> {extra}</p>
-          <p style="margin:4px 0 0;font-size:12px;color:#444;"><strong>Filtering out:</strong> {excl}</p>
+        <div style="background:#F0F9FF;border:1px solid #BAE6FD;border-radius:8px;
+                    padding:14px 18px;margin-bottom:28px;">
+          <p style="margin:0 0 8px;font-size:11px;font-weight:700;color:#0369A1;
+                    letter-spacing:.08em;text-transform:uppercase;">Active search preferences</p>
+          <p style="margin:0;font-size:12px;color:#374151;">
+            <span style="color:#6B7280;">Also searching:</span> {extra}
+          </p>
+          <p style="margin:4px 0 0;font-size:12px;color:#374151;">
+            <span style="color:#6B7280;">Filtering out:</span> {excl}
+          </p>
           {notes_row}
         </div>"""
 
     return f"""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"></head>
-<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-  <div style="max-width:600px;margin:32px auto;padding:0 16px;">
-    <div style="background:#fff;border-radius:12px;padding:32px;border:1px solid #e5e7eb;">
-      <h1 style="margin:0 0 4px;font-size:22px;color:#111;">Good morning Megan!</h1>
-      <p style="margin:0 0 24px;color:#666;font-size:14px;">{today} &mdash; {count} new {noun} found</p>
-      {prefs_html}
-      {sections}
-      <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
-      <p style="margin:0 0 8px;color:#555;font-size:13px;text-align:center;">
-        <strong>Want different results?</strong> Reply in plain English &mdash;
-        e.g. &ldquo;focus more on tech companies&rdquo; or &ldquo;skip anything in healthcare&rdquo; &mdash;
-        and I&rsquo;ll update your search automatically.<br>
-        <span style="color:#888;">You can also attach an updated resume and I&rsquo;ll use it for tomorrow&rsquo;s recommendations.</span>
-      </p>
-      <p style="margin:0;color:#999;font-size:12px;text-align:center;">
-        Searching <em>Marketing Manager</em> &amp; <em>Communications Manager</em> in San Francisco + Remote
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#F3F4F6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;">
+  <div style="max-width:620px;margin:0 auto;padding:32px 16px 48px;">
+
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#1E3A8A 0%,#2563EB 100%);
+                border-radius:12px 12px 0 0;padding:32px 36px 28px;">
+      <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#93C5FD;
+                letter-spacing:.1em;text-transform:uppercase;">Daily Job Digest</p>
+      <h1 style="margin:0 0 6px;font-size:26px;font-weight:700;color:#FFFFFF;line-height:1.2;">
+        Good morning, Megan!
+      </h1>
+      <p style="margin:0;font-size:14px;color:#BFDBFE;">
+        {today} &mdash; <strong style="color:#fff;">{count} new {noun}</strong> matched to your profile
       </p>
     </div>
+
+    <!-- Body -->
+    <div style="background:#FFFFFF;border-radius:0 0 12px 12px;padding:32px 36px;
+                border:1px solid #E5E7EB;border-top:none;">
+      {prefs_html}
+      {sections}
+
+      <!-- Footer -->
+      <div style="border-top:1px solid #F3F4F6;margin-top:8px;padding-top:24px;">
+        <p style="margin:0 0 6px;font-size:13px;color:#374151;text-align:center;font-weight:600;">
+          Want different results?
+        </p>
+        <p style="margin:0;font-size:13px;color:#6B7280;text-align:center;line-height:1.6;">
+          Reply in plain English &mdash; e.g. &ldquo;focus more on tech&rdquo; or
+          &ldquo;skip healthcare&rdquo; &mdash; and tomorrow&rsquo;s digest will adjust automatically.<br>
+          You can also <strong style="color:#374151;">attach an updated resume</strong> and I&rsquo;ll use it for future rankings.
+        </p>
+        <p style="margin:16px 0 0;font-size:11px;color:#9CA3AF;text-align:center;">
+          Searching Marketing Manager &amp; Communications Manager &bull; San Francisco + Remote
+        </p>
+      </div>
+    </div>
+
   </div>
 </body>
 </html>"""
