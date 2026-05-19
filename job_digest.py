@@ -36,6 +36,7 @@ PREFERENCES_FILE  = os.path.join(BASE_DIR, "preferences.json")
 CREDENTIALS_FILE  = os.path.join(BASE_DIR, "credentials.json")
 TOKEN_FILE        = os.path.join(BASE_DIR, "token.json")
 RESUME_FILE       = os.path.join(BASE_DIR, "resume.txt")
+SEARCH_CONFIG_FILE = os.path.join(BASE_DIR, "search_config.json")
 RADIUS_MILES      = 25
 GMAIL_SCOPES      = [
     "https://www.googleapis.com/auth/gmail.send",
@@ -77,6 +78,50 @@ def load_preferences() -> dict:
 def save_preferences(prefs: dict):
     with open(PREFERENCES_FILE, "w") as f:
         json.dump(prefs, f, indent=2)
+
+
+# ── Resume-derived search terms ───────────────────────────────────────────────
+
+def derive_search_terms() -> list[str]:
+    """Ask Claude to pick the best job title search terms for this resume. Cached in search_config.json."""
+    if not os.path.exists(RESUME_FILE):
+        return BASE_SEARCH_TERMS
+
+    with open(RESUME_FILE) as f:
+        resume = f.read()
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    response = client.messages.create(
+        model="claude-opus-4-7",
+        max_tokens=400,
+        messages=[{"role": "user", "content": f"""Based on this resume, suggest the 4-6 best job title search terms to use when hunting for roles on LinkedIn and job boards.
+
+Consider: current seniority, transferable skills, realistic next steps (lateral moves and one step up), and any niche strengths.
+
+Return only a JSON array of strings — job title search terms, no explanation.
+Example: ["Senior Marketing Manager", "Director of Marketing", "Head of Content"]
+
+RESUME:
+{resume}"""}],
+    )
+
+    raw = response.content[0].text.strip()
+    if raw.startswith("```"):
+        parts = raw.split("```")
+        raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
+
+    terms = json.loads(raw)
+    with open(SEARCH_CONFIG_FILE, "w") as f:
+        json.dump({"search_terms": terms}, f, indent=2)
+    print(f"[Search terms] Derived from resume: {terms}")
+    return terms
+
+
+def load_search_terms() -> list[str]:
+    if os.path.exists(SEARCH_CONFIG_FILE):
+        with open(SEARCH_CONFIG_FILE) as f:
+            return json.load(f).get("search_terms", BASE_SEARCH_TERMS)
+    return BASE_SEARCH_TERMS
 
 
 # ── Gmail API client ──────────────────────────────────────────────────────────
@@ -603,7 +648,8 @@ def main():
     if ANTHROPIC_API_KEY:
         replies, resume_updated = check_reply_emails(service)
         if resume_updated:
-            print("[Resume] Resume updated from Megan's reply — will use for today's ranking.")
+            print("[Resume] Resume updated — re-deriving search terms.")
+            derive_search_terms()
         for reply_text in replies:
             print(f"[Prefs] Parsing reply: {reply_text[:80]}...")
             prefs = parse_preferences_from_reply(reply_text, prefs)
@@ -612,8 +658,11 @@ def main():
     else:
         print("[Prefs] ANTHROPIC_API_KEY not set — skipping reply parsing.")
 
-    # 2. Build full search term list
-    all_terms = BASE_SEARCH_TERMS + prefs.get("extra_search_terms", [])
+    # 2. Build full search term list from resume-derived terms + any reply additions
+    if ANTHROPIC_API_KEY and not os.path.exists(SEARCH_CONFIG_FILE) and os.path.exists(RESUME_FILE):
+        derive_search_terms()
+    base_terms = load_search_terms()
+    all_terms  = base_terms + prefs.get("extra_search_terms", [])
 
     # 3. Gather, deduplicate, filter
     seen     = load_seen()
