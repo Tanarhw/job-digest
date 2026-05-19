@@ -91,10 +91,7 @@ def derive_search_terms() -> list[str]:
         resume = f.read()
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    response = client.messages.create(
-        model="claude-opus-4-7",
-        max_tokens=400,
-        messages=[{"role": "user", "content": f"""Based on this resume, suggest the 4-6 best job title search terms to use when hunting for roles on LinkedIn and job boards.
+    prompt = f"""Based on this resume, suggest the 4-6 best job title search terms to use when hunting for roles on LinkedIn and job boards.
 
 Consider: current seniority, transferable skills, realistic next steps (lateral moves and one step up), and any niche strengths.
 
@@ -102,8 +99,22 @@ Return only a JSON array of strings — job title search terms, no explanation.
 Example: ["Senior Marketing Manager", "Director of Marketing", "Head of Content"]
 
 RESUME:
-{resume}"""}],
-    )
+{resume}"""
+
+    for attempt in range(3):
+        try:
+            response = client.messages.create(
+                model="claude-opus-4-7",
+                max_tokens=400,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except Exception as ex:
+            print(f"[Claude] search terms attempt {attempt+1} failed: {ex}")
+            if attempt < 2:
+                time.sleep(10)
+            else:
+                return BASE_SEARCH_TERMS
 
     raw = response.content[0].text.strip()
     if raw.startswith("```"):
@@ -249,14 +260,22 @@ Produce updated preferences as JSON with exactly these keys:
 
 Merge intelligently with current preferences. Add new items; remove items only if she explicitly says to drop something. Return only valid JSON, no markdown, no explanation."""
 
-    response = client.messages.create(
-        model="claude-opus-4-7",
-        max_tokens=600,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    for attempt in range(3):
+        try:
+            response = client.messages.create(
+                model="claude-opus-4-7",
+                max_tokens=600,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except Exception as ex:
+            print(f"[Claude] prefs attempt {attempt+1} failed: {ex}")
+            if attempt < 2:
+                time.sleep(10)
+            else:
+                return current_prefs
 
     raw = response.content[0].text.strip()
-    # Strip markdown fences if the model wraps its output
     if raw.startswith("```"):
         parts = raw.split("```")
         raw = parts[1].lstrip("json").strip() if len(parts) > 1 else raw
@@ -420,11 +439,20 @@ Example: [{{"index": 0, "score": 9, "reason": "Senior digital marketing, nonprof
 
 Return only valid JSON, no explanation."""
 
-    response = client.messages.create(
-        model="claude-opus-4-7",
-        max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    for attempt in range(3):
+        try:
+            response = client.messages.create(
+                model="claude-opus-4-7",
+                max_tokens=1500,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except Exception as ex:
+            print(f"[Claude] ranking attempt {attempt+1} failed: {ex}")
+            if attempt < 2:
+                time.sleep(10)
+            else:
+                return jobs
 
     raw = response.content[0].text.strip()
     if raw.startswith("```"):
@@ -640,7 +668,21 @@ def send_email(service, subject: str, html: str, to: str = RECIPIENT_EMAIL):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
+def wait_for_network(timeout: int = 60):
+    """Wait until the Anthropic API is reachable — gives the network time to come up after sleep."""
+    import socket
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            socket.create_connection(("api.anthropic.com", 443), timeout=5).close()
+            return
+        except OSError:
+            time.sleep(5)
+    print("[Network] Could not reach api.anthropic.com after 60s — proceeding anyway.")
+
+
 def main():
+    wait_for_network()
     service = get_gmail_service()
 
     # 1. Check for reply emails, resume attachments, and update preferences
