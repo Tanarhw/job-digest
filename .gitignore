@@ -1,0 +1,16 @@
+# Secrets & credentials — never commit these
+credentials.json
+token.json
+.env
+
+# Runtime state
+seen_jobs.json
+preferences.json
+*.log
+
+# Resume — contains personal info
+resume.txt
+
+# Python
+__pycache__/
+*.pyc
