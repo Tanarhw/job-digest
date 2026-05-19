@@ -10,7 +10,6 @@ import json
 import base64
 import hashlib
 import time
-import feedparser
 import requests
 import anthropic
 import docx
@@ -25,6 +24,7 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 # ── Config ────────────────────────────────────────────────────────────────────
+RECIPIENT_NAME    = "Megan"
 BASE_SEARCH_TERMS = ["marketing manager", "communications manager"]
 LOCATION          = "San Francisco, CA"
 RECIPIENT_EMAIL   = "meganhalpin98@gmail.com"
@@ -228,28 +228,26 @@ def job_id(title: str, company: str, url: str) -> str:
     return hashlib.md5(f"{title.lower()}{company.lower()}{url}".encode()).hexdigest()
 
 
-def fetch_indeed(term: str, location: str) -> list[dict]:
-    q   = term.replace(" ", "+")
-    loc = location.replace(" ", "+").replace(",", "%2C")
-    url = f"https://www.indeed.com/rss?q={q}&l={loc}&sort=date&radius={RADIUS_MILES}"
+def fetch_remotive(term: str) -> list[dict]:
+    url = f"https://remotive.com/api/remote-jobs?category=marketing&search={requests.utils.quote(term)}&limit=20"
     try:
-        feed = feedparser.parse(url)
+        resp = requests.get(url, timeout=15)
         jobs = []
-        for e in feed.entries:
-            parts   = e.title.rsplit(" - ", 1)
-            title   = parts[0].strip()
-            company = parts[1].strip() if len(parts) > 1 else "Unknown"
+        for j in resp.json().get("jobs", []):
             jobs.append({
-                "title":    title,
-                "company":  company,
-                "url":      e.link,
-                "location": location,
-                "source":   "Indeed",
-                "summary":  BeautifulSoup(e.get("summary", ""), "html.parser").get_text()[:200].strip(),
+                "title":    j.get("title", ""),
+                "company":  j.get("company_name", "Unknown"),
+                "url":      j.get("url", ""),
+                "location": j.get("candidate_required_location") or "Remote",
+                "source":   "Remotive",
+                "summary":  BeautifulSoup(j.get("description", ""), "html.parser").get_text()[:200].strip(),
+                "_salary":  j.get("salary", ""),
+                "_job_type": j.get("job_type", "").replace("-", " ").title(),
+                "_work_arrangement": "Remote",
             })
         return jobs
     except Exception as ex:
-        print(f"[Indeed] error for '{term}': {ex}")
+        print(f"[Remotive] error for '{term}': {ex}")
         return []
 
 
@@ -333,8 +331,8 @@ def gather_all_jobs(search_terms: list[str]) -> list[dict]:
     all_jobs = []
     for term in search_terms:
         print(f"Fetching: {term}")
-        all_jobs += fetch_indeed(term, LOCATION)
         all_jobs += fetch_linkedin(term, LOCATION)
+        all_jobs += fetch_remotive(term)
         all_jobs += fetch_idealist(term)
         time.sleep(1)
     return all_jobs
@@ -357,7 +355,7 @@ def rank_jobs_by_fit(jobs: list[dict]) -> list[dict]:
         for i, j in enumerate(jobs)
     )
 
-    prompt = f"""You are a career coach helping filter job listings for a candidate based on their resume.
+    prompt = f"""You are a career coach helping filter and enrich job listings for a candidate based on their resume.
 
 RESUME:
 {resume}
@@ -365,16 +363,21 @@ RESUME:
 JOB LISTINGS (indexed 0 to {len(jobs)-1}):
 {job_list}
 
-Score each job 1-10 for fit based on: seniority match, relevant skills (digital marketing, CMS, SEO, analytics, nonprofit/health experience), and role type.
+For each job, return a JSON object with:
+- index: the job's index number
+- score: 1-10 fit score (seniority, skills match, sector relevance)
+- reason: max 8 words on why it fits her background
+- work_arrangement: "Remote", "Hybrid", "On-site", or "Flexible" — infer from title/description
+- job_type: "Full-time", "Contract", "Part-time", or "" if unclear
 
-Return a JSON array of objects, one per job, sorted best-to-worst, with only jobs scoring 6 or above included:
-[{{"index": <int>, "score": <int>, "reason": "<10 words max on why it fits>"}}]
+Return a JSON array sorted best-to-worst, including only jobs with score >= 6.
+Example: [{{"index": 0, "score": 9, "reason": "Senior digital marketing, nonprofit sector match", "work_arrangement": "Hybrid", "job_type": "Full-time"}}]
 
 Return only valid JSON, no explanation."""
 
     response = client.messages.create(
         model="claude-opus-4-7",
-        max_tokens=1000,
+        max_tokens=1500,
         messages=[{"role": "user", "content": prompt}],
     )
 
@@ -390,6 +393,11 @@ Return only valid JSON, no explanation."""
             job = dict(jobs[item["index"]])
             job["_match_reason"] = item.get("reason", "")
             job["_match_score"]  = item.get("score", 0)
+            # Only overwrite arrangement/type if not already set by the source API
+            if not job.get("_work_arrangement"):
+                job["_work_arrangement"] = item.get("work_arrangement", "")
+            if not job.get("_job_type"):
+                job["_job_type"] = item.get("job_type", "")
             result.append(job)
         print(f"[Claude] Ranked {len(jobs)} jobs → {len(result)} good matches")
         return result
@@ -420,14 +428,14 @@ def filter_new(jobs: list[dict], seen: set, exclude_keywords: list[str]) -> list
 # ── Email builder ─────────────────────────────────────────────────────────────
 
 SOURCE_COLORS = {
-    "Indeed":   "#2563EB",
     "LinkedIn": "#0A66C2",
+    "Remotive": "#16A34A",
     "Idealist": "#EA580C",
 }
 
 SOURCE_BG = {
-    "Indeed":   "#EFF6FF",
     "LinkedIn": "#EFF6FF",
+    "Remotive": "#F0FDF4",
     "Idealist": "#FFF7ED",
 }
 
@@ -441,18 +449,29 @@ def build_email_html(jobs: list[dict], prefs: dict) -> str:
     for job in jobs:
         by_source.setdefault(job["source"], []).append(job)
 
+    def pill(text: str, bg: str, fg: str) -> str:
+        return (f'<span style="display:inline-block;padding:3px 10px;background:{bg};color:{fg};'
+                f'font-size:11px;font-weight:600;border-radius:99px;margin-right:6px;">{text}</span>')
+
     def job_card(j: dict, color: str) -> str:
         summary_html = (
-            f'<p style="margin:8px 0 0;color:#6B7280;font-size:13px;line-height:1.5;">{j["summary"]}</p>'
+            f'<p style="margin:10px 0 0;color:#6B7280;font-size:13px;line-height:1.6;">{j["summary"]}</p>'
             if j["summary"] else ""
         )
+
+        badges = ""
+        if j.get("_work_arrangement"):
+            badges += pill(j["_work_arrangement"], "#EFF6FF", "#1D4ED8")
+        if j.get("_job_type"):
+            badges += pill(j["_job_type"], "#F3F4F6", "#374151")
+        if j.get("_salary"):
+            badges += pill(j["_salary"], "#FEF9C3", "#854D0E")
+        badges_html = f'<div style="margin-top:10px;">{badges}</div>' if badges else ""
+
         match_badge = ""
         if j.get("_match_reason"):
-            match_badge = (
-                f'<span style="display:inline-block;margin-top:10px;padding:3px 10px;'
-                f'background:#DCFCE7;color:#15803D;font-size:11px;font-weight:600;'
-                f'border-radius:99px;">{j["_match_reason"]}</span>'
-            )
+            match_badge = pill(j["_match_reason"], "#DCFCE7", "#15803D")
+
         return f"""
         <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-left:4px solid {color};
                     border-radius:8px;padding:18px 20px;margin-bottom:12px;">
@@ -462,9 +481,12 @@ def build_email_html(jobs: list[dict], prefs: dict) -> str:
             <span style="font-weight:600;color:#374151;">{j['company']}</span>
             &nbsp;&middot;&nbsp;{j['location']}
           </p>
+          {badges_html}
           {summary_html}
-          {match_badge}
-          <div style="margin-top:14px;">
+          <div style="margin-top:12px;">
+            {match_badge}
+          </div>
+          <div style="margin-top:12px;">
             <a href="{j['url']}" style="display:inline-block;padding:7px 16px;background:{color};
                color:#fff;font-size:12px;font-weight:600;text-decoration:none;border-radius:6px;">
               View role &rarr;
@@ -523,7 +545,7 @@ def build_email_html(jobs: list[dict], prefs: dict) -> str:
       <p style="margin:0 0 4px;font-size:12px;font-weight:600;color:#93C5FD;
                 letter-spacing:.1em;text-transform:uppercase;">Daily Job Digest</p>
       <h1 style="margin:0 0 6px;font-size:26px;font-weight:700;color:#FFFFFF;line-height:1.2;">
-        Good morning, Megan!
+        Good morning, {RECIPIENT_NAME}!
       </h1>
       <p style="margin:0;font-size:14px;color:#BFDBFE;">
         {today} &mdash; <strong style="color:#fff;">{count} new {noun}</strong> matched to your profile

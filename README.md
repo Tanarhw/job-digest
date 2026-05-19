@@ -1,63 +1,85 @@
 # Job Digest
 
-Daily email digest of new marketing job postings, personalized using Claude AI.
+A personalized daily job digest that emails curated listings every morning, ranked against a resume using Claude AI. Learns from plain-English reply feedback and adapts as the recipient updates their resume.
 
-## What it does
+## Features
 
-- Searches **Indeed**, **LinkedIn**, and **Idealist** for Marketing Manager and Communications Manager roles in San Francisco
-- Ranks results against a resume using Claude to surface the best matches
-- Sends a clean HTML digest email every morning at 7am
-- Learns from replies — respond in plain English to refine the search, or attach an updated resume to use for future rankings
+- Pulls jobs from **LinkedIn** and **Remotive** (remote roles)
+- **Resume-based ranking** — Claude scores each listing against the candidate's resume and filters out weak matches
+- **Salary, work arrangement, and job type** shown as badges on each card
+- **Reply to refine** — respond in plain English ("skip contract roles", "focus on nonprofits") and tomorrow's digest adjusts automatically
+- **Attach an updated resume** in a reply and it becomes the new ranking baseline
+- Deduplication — only new listings are sent each day
+- Scheduled via macOS launchd (7am daily)
 
 ## Setup
 
 ### 1. Install dependencies
 
 ```bash
-pip3 install feedparser requests beautifulsoup4 anthropic python-docx pypdf \
+pip3 install requests beautifulsoup4 anthropic python-docx pypdf \
              google-api-python-client google-auth-httplib2 google-auth-oauthlib
 ```
 
-### 2. Google Cloud credentials
+### 2. Configure `job_digest.py`
 
-- Enable the Gmail API in Google Cloud Console
-- Create an OAuth 2.0 Desktop App credential
+Edit the config block at the top:
+
+```python
+RECIPIENT_NAME    = "Your Name"          # used in the email greeting
+BASE_SEARCH_TERMS = ["marketing manager", "communications manager"]
+LOCATION          = "San Francisco, CA"
+RECIPIENT_EMAIL   = "recipient@gmail.com"
+SENDER_EMAIL      = "sender@gmail.com"
+```
+
+### 3. Google Cloud credentials
+
+- Enable the Gmail API in [Google Cloud Console](https://console.cloud.google.com)
+- Create an OAuth 2.0 **Desktop app** credential
 - Download the JSON and save it as `credentials.json` in this directory
+- Add yourself as a test user under OAuth consent screen → Test users
 
-### 3. Authorize Gmail
+### 4. Authorize Gmail (one-time)
 
 ```bash
 python3 authenticate.py
 ```
 
-This opens a browser for a one-time login and saves `token.json`.
+Opens a browser for a Google login and saves `token.json`.
 
-### 4. Add your resume
+### 5. Add a resume
 
-Save a plain text version of the candidate's resume as `resume.txt` in this directory.
+Save the candidate's resume as `resume.txt` in this directory. The script uses it to rank job matches. The recipient can also email an updated PDF or DOCX resume as a reply to any digest and it will be used from the next run onward.
 
-### 5. Set environment variables
+### 6. Set environment variables
 
 ```bash
 export ANTHROPIC_API_KEY='your-key-here'
 ```
 
-### 6. Schedule with launchd (macOS)
+### 7. Schedule with launchd (macOS)
 
-Copy `com.jobdigest.plist` to `~/Library/LaunchAgents/`, fill in your `ANTHROPIC_API_KEY`, then:
+Copy `com.jobdigest.plist` to `~/Library/LaunchAgents/`, fill in `ANTHROPIC_API_KEY`, then:
 
 ```bash
 launchctl load ~/Library/LaunchAgents/com.jobdigest.plist
 ```
 
-## Files
+### Test run
+
+```bash
+ANTHROPIC_API_KEY='your-key' python3 job_digest.py
+```
+
+## File reference
 
 | File | Purpose |
 |---|---|
 | `job_digest.py` | Main script |
-| `authenticate.py` | One-time OAuth setup |
+| `authenticate.py` | One-time Gmail OAuth setup |
 | `credentials.json` | Google OAuth credentials (**not committed**) |
 | `token.json` | OAuth access token (**not committed**) |
 | `resume.txt` | Candidate resume for ranking (**not committed**) |
 | `seen_jobs.json` | Deduplication state (**not committed**) |
-| `preferences.json` | Search preferences from replies (**not committed**) |
+| `preferences.json` | Accumulated search preferences from replies (**not committed**) |
