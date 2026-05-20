@@ -668,17 +668,26 @@ def send_email(service, subject: str, html: str, to: str = RECIPIENT_EMAIL):
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
-def wait_for_network(timeout: int = 60):
-    """Wait until the Anthropic API is reachable — gives the network time to come up after sleep."""
+def wait_for_network(timeout: int = 120):
+    """Wait until network is stable — checks both Google and Anthropic endpoints."""
     import socket
+    targets = [("api.anthropic.com", 443), ("www.googleapis.com", 443)]
     deadline = time.time() + timeout
     while time.time() < deadline:
-        try:
-            socket.create_connection(("api.anthropic.com", 443), timeout=5).close()
+        if all(_can_connect(h, p) for h, p in targets):
+            time.sleep(15)  # extra buffer for connections to fully stabilize
             return
-        except OSError:
-            time.sleep(5)
-    print("[Network] Could not reach api.anthropic.com after 60s — proceeding anyway.")
+        time.sleep(5)
+    print("[Network] Timed out waiting for network — proceeding anyway.")
+
+
+def _can_connect(host: str, port: int) -> bool:
+    import socket
+    try:
+        socket.create_connection((host, port), timeout=5).close()
+        return True
+    except OSError:
+        return False
 
 
 def main():
